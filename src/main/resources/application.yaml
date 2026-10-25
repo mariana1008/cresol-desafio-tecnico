@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: desafio-tecnico
+  datasource:
+    url: jdbc:postgresql://localhost:5432/contacorrente
+    username: app
+    password: app
+    hikari:
+      maximum-pool-size: 30
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc.batch_size: 50
+        order_inserts: true
+    flyway:
+      enabled: true
