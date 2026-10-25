@@ -1,0 +1,3583 @@
+{
+  "info": {
+    "_postman_id": "ea3d12ab-e20c-4172-aeb0-3e969ce364d1",
+    "name": "Conta Corrente - API",
+    "description": "API de conta corrente (Spring Boot).\n\nComo usar\n1. Suba a API (por padrão em http://localhost:8080). Para outra URL, edite a variável de coleção baseUrl.\n2. Clique com o botão direito na collection > Run collection e execute TODAS as pastas na ordem.\n   (A pasta 3 depende de contas criadas na pasta 1.)\n3. CPF/CNPJ são gerados automaticamente (válidos e únicos a cada execução), então pode rodar quantas vezes quiser.\n\nPastas\n1 - Fluxo principal: abertura, depósito, saque, transferência, extrato (mês atual, período anterior, paginado) e listagem.\n2 - Consistência e precisão: casas decimais, saque do saldo total, ledger fechando com o saldo.\n3 - Validações e erros: 400 / 404 / 405 / 422 e prova de rollback (saldos e extratos inalterados).\n4 - Concorrência: requisições paralelas via pm.sendRequest (lost update, deadlock, depósitos simultâneos).\n   Se os testes de concorrência acusarem 'resultados não registrados', use a versão em curl com xargs -P.\n\nTodos os requests passam por um teste de coleção: nenhum 5xx e tempo de resposta < 3 s.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "5564637",
+    "_collection_link": "https://go.postman.co/collection/5564637-ea3d12ab-e20c-4172-aeb0-3e969ce364d1?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "1 - Fluxo principal",
+      "item": [
+        {
+          "name": "1.1 Abrir conta A (CPF)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const dv = (d, p) => { let s = 0; for (let i = 0; i < d.length; i++) { s += d[i] * (p - i); } const r = s % 11; return r < 2 ? 0 : 11 - r; };\nlet base;\ndo { base = Array.from({length: 9}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);\nconst d1 = dv(base, 10);\nconst d2 = dv(base.concat(d1), 11);\nconst n = base.concat(d1, d2).join('');\npm.collectionVariables.set('cpfA', n.slice(0,3) + '.' + n.slice(3,6) + '.' + n.slice(6,9) + '-' + n.slice(9));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));\n\nconst dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };\n\nconst r = pm.response.json();\npm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {\n  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");\n});\npm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));\npm.test(\"Documento salvo sem máscara\", () => {\n  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cpfA').replace(/[^0-9A-Za-z]/g, ''));\n});\npm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));\npm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));\npm.collectionVariables.set('numeroA', r.numero);\npm.collectionVariables.set('digitoA', r.digito);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cpfA}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.2 Abrir conta B (CNPJ)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const P1 = [5,4,3,2,9,8,7,6,5,4,3,2], P2 = [6,5,4,3,2,9,8,7,6,5,4,3,2];",
+                  "const dv = (d, w) => { let s = 0; for (let i = 0; i < w.length; i++) { s += d[i] * w[i]; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "let base;",
+                  "do { base = Array.from({length: 12}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);",
+                  "const d1 = dv(base, P1);",
+                  "const d2 = dv(base.concat(d1), P2);",
+                  "const n = base.concat(d1, d2).join('');",
+                  "pm.collectionVariables.set('cnpjB', n.slice(0,2) + '.' + n.slice(2,5) + '.' + n.slice(5,8) + '/' + n.slice(8,12) + '-' + n.slice(12));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "",
+                  "const dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {",
+                  "  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");",
+                  "});",
+                  "pm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));",
+                  "pm.test(\"Documento salvo sem máscara\", () => {",
+                  "  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cnpjB').replace(/[^0-9A-Za-z]/g, ''));",
+                  "});",
+                  "pm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));",
+                  "pm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));",
+                  "pm.collectionVariables.set('numeroB', r.numero);",
+                  "pm.collectionVariables.set('digitoB', r.digito);",
+                  "",
+                  "pm.test(\"Números de conta são únicos e crescentes (sequence)\", () => pm.expect(r.numero).to.be.above(Number(pm.collectionVariables.get(\"numeroA\"))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cnpjB}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.3 Depósito 500,00 na conta A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"tipo = DEPOSITO\", () => pm.expect(r.tipo).to.eql(\"DEPOSITO\"));",
+                  "pm.test(\"valor = 500.00\", () => pm.expect(Number(r.valor)).to.eql(500.00));",
+                  "pm.test(\"saldoApos = 500\", () => pm.expect(Number(r.saldoApos)).to.eql(500));",
+                  "pm.test(\"Tem id e criadaEm; sem transferenciaId\", () => {",
+                  "  pm.expect(r.id).to.be.a(\"number\");",
+                  "  pm.expect(r.criadaEm).to.be.a(\"string\");",
+                  "  pm.expect(r.transferenciaId).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": 500.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.4 Saque 100,00 da conta A",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"tipo = SAQUE\", () => pm.expect(r.tipo).to.eql(\"SAQUE\"));",
+                  "pm.test(\"valor = 100.00\", () => pm.expect(Number(r.valor)).to.eql(100.00));",
+                  "pm.test(\"saldoApos = 400\", () => pm.expect(Number(r.saldoApos)).to.eql(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": 100.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.5 Transferência 50,00 de A para B",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Retorna transferenciaId (UUID)\", () => pm.expect(r.transferenciaId).to.match(/^[0-9a-f-]{36}$/i));",
+                  "pm.test(\"valor = 50\", () => pm.expect(Number(r.valor)).to.eql(50));",
+                  "pm.test(\"saldoOrigemApos = 350\", () => pm.expect(Number(r.saldoOrigemApos)).to.eql(350));",
+                  "pm.collectionVariables.set('transferenciaId', r.transferenciaId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroContaOrigem\": {{numeroA}},\n  \"digitoContaOrigem\": {{digitoA}},\n  \"numeroContaDestino\": {{numeroB}},\n  \"digitoContaDestino\": {{digitoB}},\n  \"valor\": 50.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.6 Extrato da conta A (mês atual)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "const m = r.movimentacoes;",
+                  "pm.test(\"Identifica a conta\", () => {",
+                  "  pm.expect(r.numeroConta).to.eql(Number(pm.collectionVariables.get('numeroA')));",
+                  "  pm.expect(r.digitoConta).to.eql(Number(pm.collectionVariables.get('digitoA')));",
+                  "});",
+                  "pm.test(\"Saldo total = 350\", () => pm.expect(Number(r.saldoTotal)).to.eql(350));",
+                  "pm.test(\"3 movimentações\", () => { pm.expect(m.length).to.eql(3); pm.expect(r.totalMovimentacoes).to.eql(3); });",
+                  "pm.test(\"Ordenado da mais recente para a mais antiga\", () => {",
+                  "  pm.expect(m.map(x => x.tipo)).to.eql([\"TRANSFERENCIA_ENVIADA\", \"SAQUE\", \"DEPOSITO\"]);",
+                  "});",
+                  "pm.test(\"saldoApos acompanha o histórico (350, 400, 500)\", () => {",
+                  "  pm.expect(m.map(x => Number(x.saldoApos))).to.eql([350, 400, 500]);",
+                  "});",
+                  "pm.test(\"Transferência enviada carrega o transferenciaId\", () => {",
+                  "  pm.expect(m[0].transferenciaId).to.eql(pm.collectionVariables.get('transferenciaId'));",
+                  "});",
+                  "pm.test(\"Sem filtros, período padrão começa no dia 1 do mês\", () => pm.expect(r.inicio).to.match(/-01$/));",
+                  "pm.test(\"Paginação padrão\", () => { pm.expect(r.pagina).to.eql(0); pm.expect(r.totalPaginas).to.eql(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.7 Extrato da conta B (recebeu a transferência)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Saldo total = 50\", () => pm.expect(Number(r.saldoTotal)).to.eql(50));",
+                  "pm.test(\"1 movimentação do tipo TRANSFERENCIA_RECEBIDA\", () => {",
+                  "  pm.expect(r.movimentacoes.length).to.eql(1);",
+                  "  pm.expect(r.movimentacoes[0].tipo).to.eql(\"TRANSFERENCIA_RECEBIDA\");",
+                  "  pm.expect(Number(r.movimentacoes[0].saldoApos)).to.eql(50);",
+                  "});",
+                  "pm.test(\"Mesmo transferenciaId nas duas pernas\", () => {",
+                  "  pm.expect(r.movimentacoes[0].transferenciaId).to.eql(pm.collectionVariables.get('transferenciaId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroB}}/{{digitoB}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroB}}",
+                "{{digitoB}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.8 Extrato de período anterior (jan/2020)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));\nconst r = pm.response.json();\npm.test(\"Nenhuma movimentação no período\", () => {\n  pm.expect(r.movimentacoes).to.be.an(\"array\").that.is.empty;\n  pm.expect(r.totalMovimentacoes).to.eql(0);\n});\npm.test(\"Saldo total continua sendo o saldo atual (350)\", () => pm.expect(Number(r.saldoTotal)).to.eql(350));\npm.test(\"Período devolvido é o solicitado\", () => {\n  pm.expect(r.inicio).to.eql(\"2020-01-01\");\n  pm.expect(r.fim).to.eql(\"2020-01-31\");\n});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?inicio=2020-01-01&fim=2020-01-31",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "inicio",
+                  "value": "2020-01-01"
+                },
+                {
+                  "key": "fim",
+                  "value": "2020-01-31"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.9 Extrato com período explícito (inclui hoje)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('fimPeriodo', new Date(Date.now() + 86400000).toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"3 movimentações no período\", () => pm.expect(r.totalMovimentacoes).to.eql(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?inicio=2000-01-01&fim={{fimPeriodo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "inicio",
+                  "value": "2000-01-01"
+                },
+                {
+                  "key": "fim",
+                  "value": "{{fimPeriodo}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.10 Extrato paginado – página 0 (tamanho 2)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"2 itens na página\", () => pm.expect(r.movimentacoes.length).to.eql(2));",
+                  "pm.test(\"Totais corretos\", () => { pm.expect(r.totalMovimentacoes).to.eql(3); pm.expect(r.totalPaginas).to.eql(2); });",
+                  "pm.test(\"Mais recentes primeiro\", () => pm.expect(r.movimentacoes[0].tipo).to.eql(\"TRANSFERENCIA_ENVIADA\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?pagina=0&tamanho=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "pagina",
+                  "value": "0"
+                },
+                {
+                  "key": "tamanho",
+                  "value": "2"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.11 Extrato paginado – página 1 (tamanho 2)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"1 item na última página\", () => pm.expect(r.movimentacoes.length).to.eql(1));",
+                  "pm.test(\"É o depósito inicial\", () => pm.expect(r.movimentacoes[0].tipo).to.eql(\"DEPOSITO\"));",
+                  "pm.test(\"pagina = 1\", () => pm.expect(r.pagina).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?pagina=1&tamanho=2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "pagina",
+                  "value": "1"
+                },
+                {
+                  "key": "tamanho",
+                  "value": "2"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.12 Listar contas (paginado)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Estrutura da página\", () => {",
+                  "  pm.expect(r).to.include.keys(\"conteudo\", \"pagina\", \"tamanho\", \"totalPaginas\", \"totalElementos\");",
+                  "  pm.expect(r.conteudo).to.be.an(\"array\");",
+                  "});",
+                  "pm.test(\"Respeita o tamanho pedido\", () => {",
+                  "  pm.expect(r.tamanho).to.eql(5);",
+                  "  pm.expect(r.conteudo.length).to.be.at.most(5);",
+                  "});",
+                  "pm.test(\"Há pelo menos as 2 contas criadas\", () => pm.expect(r.totalElementos).to.be.at.least(2));",
+                  "pm.test(\"Cada conta tem os campos esperados\", () => {",
+                  "  r.conteudo.forEach(c => pm.expect(c).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?pagina=0&tamanho=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "pagina",
+                  "value": "0"
+                },
+                {
+                  "key": "tamanho",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.13 Listar contas filtrando por CPF (com máscara)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Encontra exatamente a conta A\", () => {",
+                  "  pm.expect(r.totalElementos).to.eql(1);",
+                  "  pm.expect(r.conteudo[0].numero).to.eql(Number(pm.collectionVariables.get('numeroA')));",
+                  "  pm.expect(Number(r.conteudo[0].saldo)).to.eql(350);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?documento={{cpfA}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "documento",
+                  "value": "{{cpfA}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.14 Listar contas filtrando por CNPJ (com máscara)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Encontra exatamente a conta B\", () => {",
+                  "  pm.expect(r.totalElementos).to.eql(1);",
+                  "  pm.expect(r.conteudo[0].numero).to.eql(Number(pm.collectionVariables.get('numeroB')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?documento={{cnpjB}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "documento",
+                  "value": "{{cnpjB}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.15 Listar contas filtrando por documento sem máscara",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('docSemMascaraA', pm.collectionVariables.get('cpfA').replace(/\\D/g, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"O filtro ignora a máscara (mesma conta A)\", () => {",
+                  "  pm.expect(r.totalElementos).to.eql(1);",
+                  "  pm.expect(r.conteudo[0].numero).to.eql(Number(pm.collectionVariables.get('numeroA')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?documento={{docSemMascaraA}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "documento",
+                  "value": "{{docSemMascaraA}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.16 Listar contas com documento inexistente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Lista vazia\", () => { pm.expect(r.conteudo).to.be.empty; pm.expect(r.totalElementos).to.eql(0); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?documento=00000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "documento",
+                  "value": "00000000000"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.17 Listar contas com tamanho acima do máximo (1000)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));\nconst r = pm.response.json();\npm.test(\"Tamanho limitado a 100\", () => {\n  pm.expect(r.tamanho).to.be.at.most(100);\n  pm.expect(r.conteudo.length).to.be.at.most(100);\n});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?tamanho=1000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "tamanho",
+                  "value": "1000"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "1.18 Listar contas com página negativa",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Página negativa vira 0\", () => pm.expect(pm.response.json().pagina).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?pagina=-5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "pagina",
+                  "value": "-5"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "description": "Caminho feliz. Executar em ordem."
+    },
+    {
+      "name": "2 - Consistência e precisão",
+      "item": [
+        {
+          "name": "2.1 Abrir conta C (CPF)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const dv = (d, p) => { let s = 0; for (let i = 0; i < d.length; i++) { s += d[i] * (p - i); } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "let base;",
+                  "do { base = Array.from({length: 9}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);",
+                  "const d1 = dv(base, 10);",
+                  "const d2 = dv(base.concat(d1), 11);",
+                  "const n = base.concat(d1, d2).join('');",
+                  "pm.collectionVariables.set('cpfC', n.slice(0,3) + '.' + n.slice(3,6) + '.' + n.slice(6,9) + '-' + n.slice(9));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "",
+                  "const dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {",
+                  "  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");",
+                  "});",
+                  "pm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));",
+                  "pm.test(\"Documento salvo sem máscara\", () => {",
+                  "  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cpfC').replace(/[^0-9A-Za-z]/g, ''));",
+                  "});",
+                  "pm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));",
+                  "pm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));",
+                  "pm.collectionVariables.set('numeroC', r.numero);",
+                  "pm.collectionVariables.set('digitoC', r.digito);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cpfC}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.2 Depósito 10,10",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"tipo = DEPOSITO\", () => pm.expect(r.tipo).to.eql(\"DEPOSITO\"));",
+                  "pm.test(\"valor = 10.10\", () => pm.expect(Number(r.valor)).to.eql(10.10));",
+                  "pm.test(\"saldoApos = 10.1\", () => pm.expect(Number(r.saldoApos)).to.eql(10.1));",
+                  "pm.test(\"Tem id e criadaEm; sem transferenciaId\", () => {",
+                  "  pm.expect(r.id).to.be.a(\"number\");",
+                  "  pm.expect(r.criadaEm).to.be.a(\"string\");",
+                  "  pm.expect(r.transferenciaId).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroC}},\n  \"digitoConta\": {{digitoC}},\n  \"valor\": 10.10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.3 Depósito 20,20 (precisão decimal: 30,30)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"tipo = DEPOSITO\", () => pm.expect(r.tipo).to.eql(\"DEPOSITO\"));",
+                  "pm.test(\"valor = 20.20\", () => pm.expect(Number(r.valor)).to.eql(20.20));",
+                  "pm.test(\"saldoApos = 30.3\", () => pm.expect(Number(r.saldoApos)).to.eql(30.3));",
+                  "pm.test(\"Tem id e criadaEm; sem transferenciaId\", () => {",
+                  "  pm.expect(r.id).to.be.a(\"number\");",
+                  "  pm.expect(r.criadaEm).to.be.a(\"string\");",
+                  "  pm.expect(r.transferenciaId).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroC}},\n  \"digitoConta\": {{digitoC}},\n  \"valor\": 20.20\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.4 Saque do saldo inteiro (30,30) é permitido",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"tipo = SAQUE\", () => pm.expect(r.tipo).to.eql(\"SAQUE\"));",
+                  "pm.test(\"valor = 30.30\", () => pm.expect(Number(r.valor)).to.eql(30.30));",
+                  "pm.test(\"saldoApos = 0\", () => pm.expect(Number(r.saldoApos)).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroC}},\n  \"digitoConta\": {{digitoC}},\n  \"valor\": 30.30\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.5 Saque de 0,01 com saldo zerado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"Saldo insuficiente\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroC}},\n  \"digitoConta\": {{digitoC}},\n  \"valor\": 0.01\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.6 Depósito mínimo 0,01",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"tipo = DEPOSITO\", () => pm.expect(r.tipo).to.eql(\"DEPOSITO\"));",
+                  "pm.test(\"valor = 0.01\", () => pm.expect(Number(r.valor)).to.eql(0.01));",
+                  "pm.test(\"saldoApos = 0.01\", () => pm.expect(Number(r.saldoApos)).to.eql(0.01));",
+                  "pm.test(\"Tem id e criadaEm; sem transferenciaId\", () => {",
+                  "  pm.expect(r.id).to.be.a(\"number\");",
+                  "  pm.expect(r.criadaEm).to.be.a(\"string\");",
+                  "  pm.expect(r.transferenciaId).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroC}},\n  \"digitoConta\": {{digitoC}},\n  \"valor\": 0.01\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2.7 Extrato C: o ledger fecha com o saldo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "const m = r.movimentacoes;",
+                  "const cents = x => Math.round(Number(x) * 100);",
+                  "pm.test(\"Saldo total = 0,01\", () => pm.expect(cents(r.saldoTotal)).to.eql(1));",
+                  "pm.test(\"4 movimentações, só as bem-sucedidas (a falha de 2.5 não gerou registro)\", () => pm.expect(r.totalMovimentacoes).to.eql(4));",
+                  "pm.test(\"Sequência de saldoApos (0,01 / 0 / 30,30 / 10,10)\", () => pm.expect(m.map(x => cents(x.saldoApos))).to.eql([1, 0, 3030, 1010]));",
+                  "pm.test(\"Créditos − débitos = saldo total\", () => {",
+                  "  const net = m.reduce((a, x) => a + (x.tipo === \"DEPOSITO\" || x.tipo === \"TRANSFERENCIA_RECEBIDA\" ? 1 : -1) * cents(x.valor), 0);",
+                  "  pm.expect(net).to.eql(cents(r.saldoTotal));",
+                  "});",
+                  "pm.test(\"Cada saldoApos == saldoApos anterior ± valor\", () => {",
+                  "  const asc = [...m].reverse();",
+                  "  let saldo = 0;",
+                  "  asc.forEach(x => {",
+                  "    saldo += (x.tipo === \"DEPOSITO\" || x.tipo === \"TRANSFERENCIA_RECEBIDA\" ? 1 : -1) * cents(x.valor);",
+                  "    pm.expect(cents(x.saldoApos)).to.eql(saldo);",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroC}}/{{digitoC}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroC}}",
+                "{{digitoC}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3 - Validações e erros",
+      "item": [
+        {
+          "name": "3.0 Preparar dígitos errados (auxiliar)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('digitoErradoA', (Number(pm.collectionVariables.get('digitoA')) + 1) % 10);",
+                  "pm.collectionVariables.set('digitoErradoB', (Number(pm.collectionVariables.get('digitoB')) + 1) % 10);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas?tamanho=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ],
+              "query": [
+                {
+                  "key": "tamanho",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.1 Abertura: CPF com dígitos repetidos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"CPF/CNPJ inválido\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"111.111.111-11\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.2 Abertura: CPF com dígito verificador errado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"CPF/CNPJ inválido\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"529.982.247-26\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.3 Abertura: CNPJ com dígito verificador errado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"CPF/CNPJ inválido\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"11.222.333/0001-82\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.4 Abertura: documento com tamanho inválido",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"documento\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.5 Abertura: documento em branco",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"documento\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.6 Abertura: sem o campo documento",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"documento\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.7 Abertura: JSON malformado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"documento\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.8 Depósito: valor zero",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"valor\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.9 Depósito: valor negativo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"valor\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": -10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.10 Depósito: mais de 2 casas decimais",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"valor\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": 10.123\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.11 Depósito: sem valor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"valor\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.12 Depósito: dígito fora de 0–9",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"digitoConta\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": 15,\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.13 Depósito: número de conta negativo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"numeroConta\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": -1,\n  \"digitoConta\": 0,\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.14 Depósito: dígito verificador errado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"Dígito verificador inválido\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoErradoA}},\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.15 Depósito: conta inexistente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(404);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"não encontrada\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": 99999999,\n  \"digitoConta\": 0,\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.16 Saque: valor zero",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"valor\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.17 Saque: saldo insuficiente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"Saldo insuficiente\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoA}},\n  \"valor\": 999999.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.18 Saque: dígito verificador errado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"Dígito verificador inválido\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroA}},\n  \"digitoConta\": {{digitoErradoA}},\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.19 Saque: conta inexistente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(404);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"não encontrada\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": 99999999,\n  \"digitoConta\": 0,\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/saque",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "saque"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.20 Transferência: origem igual ao destino",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"diferentes\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroContaOrigem\": {{numeroA}},\n  \"digitoContaOrigem\": {{digitoA}},\n  \"numeroContaDestino\": {{numeroA}},\n  \"digitoContaDestino\": {{digitoA}},\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.21 Transferência: saldo insuficiente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"Saldo insuficiente\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroContaOrigem\": {{numeroA}},\n  \"digitoContaOrigem\": {{digitoA}},\n  \"numeroContaDestino\": {{numeroB}},\n  \"digitoContaDestino\": {{digitoB}},\n  \"valor\": 999999.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.22 Transferência: conta de destino inexistente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(404);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"não encontrada\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroContaOrigem\": {{numeroA}},\n  \"digitoContaOrigem\": {{digitoA}},\n  \"numeroContaDestino\": 99999999,\n  \"digitoContaDestino\": 0,\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.23 Transferência: dígito do destino errado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"Dígito verificador inválido\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroContaOrigem\": {{numeroA}},\n  \"digitoContaOrigem\": {{digitoA}},\n  \"numeroContaDestino\": {{numeroB}},\n  \"digitoContaDestino\": {{digitoErradoB}},\n  \"valor\": 10.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.24 Transferência: valor negativo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"valor\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroContaOrigem\": {{numeroA}},\n  \"digitoContaOrigem\": {{digitoA}},\n  \"numeroContaDestino\": {{numeroB}},\n  \"digitoContaDestino\": {{digitoB}},\n  \"valor\": -5.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.25 Transferência: body vazio",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(400);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"numeroContaOrigem\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/transferencia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "transferencia"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.26 Extrato: conta inexistente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(404);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"não encontrada\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/99999999/0/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "99999999",
+                "0",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.27 Extrato: dígito errado para conta existente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(404);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"não encontrada\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoErradoA}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoErradoA}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.28 Extrato: data final anterior à inicial",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"Corpo no formato ProblemDetail (status e detail)\", () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b.status).to.eql(422);",
+                  "  pm.expect(b.detail).to.be.a(\"string\");",
+                  "  pm.expect(b.detail).to.include(\"data final\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?inicio=2026-10-31&fim=2026-10-01",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "inicio",
+                  "value": "2026-10-31"
+                },
+                {
+                  "key": "fim",
+                  "value": "2026-10-01"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.29 Extrato: data em formato inválido",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?inicio=abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "inicio",
+                  "value": "abc"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.30 Extrato: tamanho acima do máximo (1000)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Resposta limitada a 100 itens\", () => pm.expect(pm.response.json().movimentacoes.length).to.be.at.most(100));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato?tamanho=1000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ],
+              "query": [
+                {
+                  "key": "tamanho",
+                  "value": "1000"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.31 Método não permitido (DELETE /contas)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 405\", () => pm.response.to.have.status(405));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.32 Integridade: extrato A inalterado após os erros (rollback)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Saldo de A continua 350\", () => pm.expect(Number(r.saldoTotal)).to.eql(350));",
+                  "pm.test(\"Continuam só 3 movimentações (falhas não gravaram nada)\", () => pm.expect(r.totalMovimentacoes).to.eql(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroA}}/{{digitoA}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroA}}",
+                "{{digitoA}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3.33 Integridade: extrato B inalterado após os erros",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Saldo de B continua 50\", () => pm.expect(Number(r.saldoTotal)).to.eql(50));",
+                  "pm.test(\"Continua só 1 movimentação\", () => pm.expect(r.totalMovimentacoes).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroB}}/{{digitoB}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroB}}",
+                "{{digitoB}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "description": "Depende das contas A e B da pasta 1."
+    },
+    {
+      "name": "4 - Concorrência",
+      "item": [
+        {
+          "name": "4A.1 Abrir conta E",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const dv = (d, p) => { let s = 0; for (let i = 0; i < d.length; i++) { s += d[i] * (p - i); } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "let base;",
+                  "do { base = Array.from({length: 9}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);",
+                  "const d1 = dv(base, 10);",
+                  "const d2 = dv(base.concat(d1), 11);",
+                  "const n = base.concat(d1, d2).join('');",
+                  "pm.collectionVariables.set('cpfE', n.slice(0,3) + '.' + n.slice(3,6) + '.' + n.slice(6,9) + '-' + n.slice(9));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "",
+                  "const dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {",
+                  "  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");",
+                  "});",
+                  "pm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));",
+                  "pm.test(\"Documento salvo sem máscara\", () => {",
+                  "  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cpfE').replace(/[^0-9A-Za-z]/g, ''));",
+                  "});",
+                  "pm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));",
+                  "pm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));",
+                  "pm.collectionVariables.set('numeroE', r.numero);",
+                  "pm.collectionVariables.set('digitoE', r.digito);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cpfE}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4A.2 Depositar 20,00 na conta E",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroE}},\n  \"digitoConta\": {{digitoE}},\n  \"valor\": 20.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4A.3 Disparar 30 saques de 1,00 em paralelo e conferir o extrato de E",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Dispara as requisições EM PARALELO (pm.sendRequest não espera uma terminar para iniciar a outra).",
+                  "const base = pm.collectionVariables.get('baseUrl');",
+                  "const tarefas = Array.from({length: 30}, () => { const g = k => Number(pm.collectionVariables.get(k)); return {path: '/contas/saque', body: {numeroConta: g('numeroE'), digitoConta: g('digitoE'), valor: 1.00}}; });",
+                  "const resultados = [];",
+                  "tarefas.forEach(t => {",
+                  "  pm.sendRequest({",
+                  "    url: base + t.path,",
+                  "    method: 'POST',",
+                  "    header: {'Content-Type': 'application/json'},",
+                  "    body: {mode: 'raw', raw: JSON.stringify(t.body)}",
+                  "  }, (err, res) => {",
+                  "    resultados.push(err ? 'ERR' : res.code);",
+                  "    if (resultados.length === tarefas.length) {",
+                  "      pm.collectionVariables.set('resSaques', JSON.stringify(resultados));",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const bruto = pm.collectionVariables.get('resSaques');",
+                  "pm.test(\"Disparo paralelo concluído e resultados registrados\", () => pm.expect(bruto, \"resultados não registrados\").to.be.a(\"string\"));",
+                  "const res = JSON.parse(bruto || \"[]\");",
+                  "const cont = c => res.filter(x => x === c).length;",
+                  "const falhasInesperadas = res.filter(x => x === 'ERR' || x === 409 || x >= 500).length;",
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Exatamente 20 saques aprovados (201)\", () => pm.expect(cont(201)).to.eql(20));",
+                  "pm.test(\"Os outros 10 foram recusados por saldo insuficiente (422)\", () => pm.expect(cont(422)).to.eql(10));",
+                  "pm.test(\"Nenhum erro 5xx, 409 (timeout de lock) ou falha de rede\", () => pm.expect(falhasInesperadas).to.eql(0));",
+                  "pm.test(\"Saldo final é 0 (nunca negativo – sem lost update)\", () => pm.expect(Number(r.saldoTotal)).to.eql(0));",
+                  "pm.test(\"Movimentações = 1 depósito + 20 saques\", () => pm.expect(r.totalMovimentacoes).to.eql(21));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroE}}/{{digitoE}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroE}}",
+                "{{digitoE}}",
+                "extrato"
+              ]
+            },
+            "description": "Conta com 20,00 e 30 saques simultâneos de 1,00. O lock pessimista deve deixar passar exatamente 20."
+          },
+          "response": []
+        },
+        {
+          "name": "4B.1 Abrir conta F",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const dv = (d, p) => { let s = 0; for (let i = 0; i < d.length; i++) { s += d[i] * (p - i); } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "let base;",
+                  "do { base = Array.from({length: 9}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);",
+                  "const d1 = dv(base, 10);",
+                  "const d2 = dv(base.concat(d1), 11);",
+                  "const n = base.concat(d1, d2).join('');",
+                  "pm.collectionVariables.set('cpfF', n.slice(0,3) + '.' + n.slice(3,6) + '.' + n.slice(6,9) + '-' + n.slice(9));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "",
+                  "const dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {",
+                  "  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");",
+                  "});",
+                  "pm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));",
+                  "pm.test(\"Documento salvo sem máscara\", () => {",
+                  "  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cpfF').replace(/[^0-9A-Za-z]/g, ''));",
+                  "});",
+                  "pm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));",
+                  "pm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));",
+                  "pm.collectionVariables.set('numeroF', r.numero);",
+                  "pm.collectionVariables.set('digitoF', r.digito);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cpfF}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4B.2 Abrir conta G",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const P1 = [5,4,3,2,9,8,7,6,5,4,3,2], P2 = [6,5,4,3,2,9,8,7,6,5,4,3,2];",
+                  "const dv = (d, w) => { let s = 0; for (let i = 0; i < w.length; i++) { s += d[i] * w[i]; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "let base;",
+                  "do { base = Array.from({length: 12}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);",
+                  "const d1 = dv(base, P1);",
+                  "const d2 = dv(base.concat(d1), P2);",
+                  "const n = base.concat(d1, d2).join('');",
+                  "pm.collectionVariables.set('cnpjG', n.slice(0,2) + '.' + n.slice(2,5) + '.' + n.slice(5,8) + '/' + n.slice(8,12) + '-' + n.slice(12));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "",
+                  "const dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {",
+                  "  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");",
+                  "});",
+                  "pm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));",
+                  "pm.test(\"Documento salvo sem máscara\", () => {",
+                  "  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cnpjG').replace(/[^0-9A-Za-z]/g, ''));",
+                  "});",
+                  "pm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));",
+                  "pm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));",
+                  "pm.collectionVariables.set('numeroG', r.numero);",
+                  "pm.collectionVariables.set('digitoG', r.digito);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cnpjG}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4B.3 Depositar 100,00 na conta F",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroF}},\n  \"digitoConta\": {{digitoF}},\n  \"valor\": 100.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4B.4 Depositar 100,00 na conta G",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroConta\": {{numeroG}},\n  \"digitoConta\": {{digitoG}},\n  \"valor\": 100.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas/deposito",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "deposito"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4B.5 Disparar 40 transferências cruzadas (20 F→G e 20 G→F) e conferir F",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Dispara as requisições EM PARALELO (pm.sendRequest não espera uma terminar para iniciar a outra).",
+                  "const base = pm.collectionVariables.get('baseUrl');",
+                  "const tarefas = Array.from({length: 40}, (_, i) => { const g = k => Number(pm.collectionVariables.get(k)); const o = i % 2 === 0 ? 'F' : 'G', d = i % 2 === 0 ? 'G' : 'F'; return {path: '/contas/transferencia', body: {numeroContaOrigem: g('numero' + o), digitoContaOrigem: g('digito' + o), numeroContaDestino: g('numero' + d), digitoContaDestino: g('digito' + d), valor: 1.00}}; });",
+                  "const resultados = [];",
+                  "tarefas.forEach(t => {",
+                  "  pm.sendRequest({",
+                  "    url: base + t.path,",
+                  "    method: 'POST',",
+                  "    header: {'Content-Type': 'application/json'},",
+                  "    body: {mode: 'raw', raw: JSON.stringify(t.body)}",
+                  "  }, (err, res) => {",
+                  "    resultados.push(err ? 'ERR' : res.code);",
+                  "    if (resultados.length === tarefas.length) {",
+                  "      pm.collectionVariables.set('resCruzadas', JSON.stringify(resultados));",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const bruto = pm.collectionVariables.get('resCruzadas');",
+                  "pm.test(\"Disparo paralelo concluído e resultados registrados\", () => pm.expect(bruto, \"resultados não registrados\").to.be.a(\"string\"));",
+                  "const res = JSON.parse(bruto || \"[]\");",
+                  "const cont = c => res.filter(x => x === c).length;",
+                  "const falhasInesperadas = res.filter(x => x === 'ERR' || x === 409 || x >= 500).length;",
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Todas as 40 transferências aprovadas (201)\", () => pm.expect(cont(201)).to.eql(40));",
+                  "pm.test(\"Sem deadlock: nenhum 5xx, 409 ou falha de rede\", () => pm.expect(falhasInesperadas).to.eql(0));",
+                  "pm.test(\"Saldo de F voltou a 100 (20 saíram, 20 entraram)\", () => pm.expect(Number(r.saldoTotal)).to.eql(100));",
+                  "pm.test(\"Movimentações de F = 1 depósito + 20 enviadas + 20 recebidas\", () => pm.expect(r.totalMovimentacoes).to.eql(41));",
+                  "pm.collectionVariables.set('saldoF', r.saldoTotal);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroF}}/{{digitoF}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroF}}",
+                "{{digitoF}}",
+                "extrato"
+              ]
+            },
+            "description": "Transferências em sentidos opostos ao mesmo tempo. Sem a ordenação de locks, geraria deadlock."
+          },
+          "response": []
+        },
+        {
+          "name": "4B.6 Conferir G e a soma dos saldos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Saldo de G voltou a 100\", () => pm.expect(Number(r.saldoTotal)).to.eql(100));",
+                  "pm.test(\"Movimentações de G = 41\", () => pm.expect(r.totalMovimentacoes).to.eql(41));",
+                  "pm.test(\"Soma dos saldos F + G continua 200 (nenhum valor criado ou perdido)\", () => {",
+                  "  pm.expect(Number(pm.collectionVariables.get('saldoF')) + Number(r.saldoTotal)).to.eql(200);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroG}}/{{digitoG}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroG}}",
+                "{{digitoG}}",
+                "extrato"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4C.1 Abrir conta H",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const dv = (d, p) => { let s = 0; for (let i = 0; i < d.length; i++) { s += d[i] * (p - i); } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "let base;",
+                  "do { base = Array.from({length: 9}, () => Math.floor(Math.random() * 10)); } while (new Set(base).size === 1);",
+                  "const d1 = dv(base, 10);",
+                  "const d2 = dv(base.concat(d1), 11);",
+                  "const n = base.concat(d1, d2).join('');",
+                  "pm.collectionVariables.set('cpfH', n.slice(0,3) + '.' + n.slice(3,6) + '.' + n.slice(6,9) + '-' + n.slice(9));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status 201\", () => pm.response.to.have.status(201));",
+                  "",
+                  "const dvConta = (n) => { let s = 0, p = 2; for (const c of String(n).split('').reverse()) { s += Number(c) * p; p = p === 9 ? 2 : p + 1; } const r = s % 11; return r < 2 ? 0 : 11 - r; };",
+                  "",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Resposta traz numero, digito, documento, saldo e criadaEm\", () => {",
+                  "  pm.expect(r).to.include.keys(\"numero\", \"digito\", \"documento\", \"saldo\", \"criadaEm\");",
+                  "});",
+                  "pm.test(\"Saldo inicial é zero\", () => pm.expect(Number(r.saldo)).to.eql(0));",
+                  "pm.test(\"Documento salvo sem máscara\", () => {",
+                  "  pm.expect(r.documento).to.eql(pm.collectionVariables.get('cpfH').replace(/[^0-9A-Za-z]/g, ''));",
+                  "});",
+                  "pm.test(\"Dígito verificador confere (módulo 11)\", () => pm.expect(r.digito).to.eql(dvConta(r.numero)));",
+                  "pm.test(\"Dígito entre 0 e 9\", () => pm.expect(r.digito).to.be.within(0, 9));",
+                  "pm.collectionVariables.set('numeroH', r.numero);",
+                  "pm.collectionVariables.set('digitoH', r.digito);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documento\": \"{{cpfH}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/contas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "4C.2 Disparar 40 depósitos de 1,00 em paralelo e conferir o extrato de H",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Dispara as requisições EM PARALELO (pm.sendRequest não espera uma terminar para iniciar a outra).",
+                  "const base = pm.collectionVariables.get('baseUrl');",
+                  "const tarefas = Array.from({length: 40}, () => { const g = k => Number(pm.collectionVariables.get(k)); return {path: '/contas/deposito', body: {numeroConta: g('numeroH'), digitoConta: g('digitoH'), valor: 1.00}}; });",
+                  "const resultados = [];",
+                  "tarefas.forEach(t => {",
+                  "  pm.sendRequest({",
+                  "    url: base + t.path,",
+                  "    method: 'POST',",
+                  "    header: {'Content-Type': 'application/json'},",
+                  "    body: {mode: 'raw', raw: JSON.stringify(t.body)}",
+                  "  }, (err, res) => {",
+                  "    resultados.push(err ? 'ERR' : res.code);",
+                  "    if (resultados.length === tarefas.length) {",
+                  "      pm.collectionVariables.set('resDepositos', JSON.stringify(resultados));",
+                  "    }",
+                  "  });",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const bruto = pm.collectionVariables.get('resDepositos');",
+                  "pm.test(\"Disparo paralelo concluído e resultados registrados\", () => pm.expect(bruto, \"resultados não registrados\").to.be.a(\"string\"));",
+                  "const res = JSON.parse(bruto || \"[]\");",
+                  "const cont = c => res.filter(x => x === c).length;",
+                  "const falhasInesperadas = res.filter(x => x === 'ERR' || x === 409 || x >= 500).length;",
+                  "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"Todos os 40 depósitos aprovados (201)\", () => pm.expect(cont(201)).to.eql(40));",
+                  "pm.test(\"Nenhum erro 5xx, 409 ou falha de rede\", () => pm.expect(falhasInesperadas).to.eql(0));",
+                  "pm.test(\"Saldo final = 40,00 (nenhum depósito perdido)\", () => pm.expect(Number(r.saldoTotal)).to.eql(40));",
+                  "pm.test(\"40 registros no extrato\", () => pm.expect(r.totalMovimentacoes).to.eql(40));",
+                  "pm.test(\"Último saldoApos = 40 (sequência consistente)\", () => pm.expect(Number(r.movimentacoes[0].saldoApos)).to.eql(40));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contas/{{numeroH}}/{{digitoH}}/extrato",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contas",
+                "{{numeroH}}",
+                "{{digitoH}}",
+                "extrato"
+              ]
+            },
+            "description": "40 depósitos simultâneos na mesma conta: nenhum pode ser sobrescrito por outro (lost update)."
+          },
+          "response": []
+        }
+      ],
+      "description": "Requisições paralelas dentro do Postman."
+    }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test(\"Nenhum erro 5xx\", () => pm.expect(pm.response.code).to.be.below(500));",
+          "pm.test(\"Tempo de resposta < 3000 ms\", () => pm.expect(pm.response.responseTime).to.be.below(3000));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "digitoErradoA",
+      "value": ""
+    },
+    {
+      "key": "digitoErradoB",
+      "value": ""
+    },
+    {
+      "key": "transferenciaId",
+      "value": ""
+    },
+    {
+      "key": "cpfA",
+      "value": ""
+    },
+    {
+      "key": "numeroA",
+      "value": ""
+    },
+    {
+      "key": "digitoA",
+      "value": ""
+    },
+    {
+      "key": "cnpjB",
+      "value": ""
+    },
+    {
+      "key": "numeroB",
+      "value": ""
+    },
+    {
+      "key": "digitoB",
+      "value": ""
+    },
+    {
+      "key": "fimPeriodo",
+      "value": ""
+    },
+    {
+      "key": "docSemMascaraA",
+      "value": ""
+    },
+    {
+      "key": "cpfC",
+      "value": ""
+    },
+    {
+      "key": "numeroC",
+      "value": ""
+    },
+    {
+      "key": "digitoC",
+      "value": ""
+    },
+    {
+      "key": "cpfE",
+      "value": ""
+    },
+    {
+      "key": "numeroE",
+      "value": ""
+    },
+    {
+      "key": "digitoE",
+      "value": ""
+    },
+    {
+      "key": "resSaques",
+      "value": ""
+    },
+    {
+      "key": "cpfF",
+      "value": ""
+    },
+    {
+      "key": "numeroF",
+      "value": ""
+    },
+    {
+      "key": "digitoF",
+      "value": ""
+    },
+    {
+      "key": "cnpjG",
+      "value": ""
+    },
+    {
+      "key": "numeroG",
+      "value": ""
+    },
+    {
+      "key": "digitoG",
+      "value": ""
+    },
+    {
+      "key": "resCruzadas",
+      "value": ""
+    },
+    {
+      "key": "saldoF",
+      "value": ""
+    },
+    {
+      "key": "cpfH",
+      "value": ""
+    },
+    {
+      "key": "numeroH",
+      "value": ""
+    },
+    {
+      "key": "digitoH",
+      "value": ""
+    },
+    {
+      "key": "resDepositos",
+      "value": ""
+    }
+  ]
+}
