@@ -61,7 +61,7 @@ public class Movimentacao {
         this.conta = conta;
         this.tipo = tipo;
         this.valor = valor;
-        this.saldoApos = conta.getSaldo(); // chamar DEPOIS de creditar/debitar
+        this.saldoApos = conta.getSaldo();
         this.contaContraparteId = contaContraparteId;
         this.transferenciaId = transferenciaId;
         this.criadaEm = Instant.now();
