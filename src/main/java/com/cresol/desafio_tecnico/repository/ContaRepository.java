@@ -3,6 +3,8 @@ package com.cresol.desafio_tecnico.repository;
 import com.cresol.desafio_tecnico.model.Conta;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 import java.util.Optional;
@@ -18,4 +20,6 @@ public interface ContaRepository extends JpaRepository<Conta, Long> {
 
     @Query(value = "select nextval('conta_numero_seq')", nativeQuery = true)
     long proximoNumero();
+
+    Page<Conta> findByDocumento(String documento, Pageable pageable);
 }

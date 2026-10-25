@@ -8,9 +8,9 @@ public class AberturaContaRequest {
 
     @NotBlank
     @CpfCnpj
-    private String cpfCnpj;
+    private String documento;
 
-    public String getCpfCnpj() { return cpfCnpj; }
+    public String getDocumento() { return documento; }
 
-    public void setCpfCnpj(String cpfCnpj) { this.cpfCnpj = cpfCnpj; }
+    public void setDocumento(String documento) { this.documento = documento; }
 }

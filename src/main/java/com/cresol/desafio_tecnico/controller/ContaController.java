@@ -52,4 +52,12 @@ public class ContaController {
             @RequestParam(defaultValue = "50") int tamanho) {
         return service.extrato(numero, digito, inicio, fim, pagina, tamanho);
     }
+
+    @GetMapping
+    public PaginaResponse<ContaResponse> listar(
+            @RequestParam(required = false) String documento,
+            @RequestParam(defaultValue = "0") int pagina,
+            @RequestParam(defaultValue = "50") int tamanho) {
+        return service.listarTodasAsContas(documento, pagina, tamanho);
+    }
 }

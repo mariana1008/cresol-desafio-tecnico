@@ -12,6 +12,8 @@ import com.cresol.desafio_tecnico.util.CpfCnpjValidador;
 import com.cresol.desafio_tecnico.util.DigitoVerificadorConta;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,7 +38,7 @@ public class ContaService {
 
     @Transactional
     public ContaResponse abrir(AberturaContaRequest request) {
-        String documento = CpfCnpjValidador.normalizar(request.getCpfCnpj());
+        String documento = CpfCnpjValidador.normalizar(request.getDocumento());
         long numero = contaRepository.proximoNumero();
         short digito = (short) DigitoVerificadorConta.calcular(numero);
         Conta conta = contaRepository.save(new Conta(numero, digito, documento));
@@ -67,8 +69,6 @@ public class ContaService {
             throw new OperacaoInvalidaException("Conta de origem e destino devem ser diferentes");
         }
 
-        // Lock SEMPRE na mesma ordem (menor número primeiro) => evita deadlock
-        // entre A->B e B->A simultâneos.
         Conta origem;
         Conta destino;
         if (r.getNumeroContaOrigem() < r.getNumeroContaDestino()) {
@@ -114,6 +114,22 @@ public class ContaService {
         return new ExtratoResponse(conta.getNumero(), conta.getDigito(), conta.getSaldo(), de, ate,
                 p.getNumber(), p.getTotalPages(), p.getTotalElements(),
                 p.getContent().stream().map(MovimentacaoResponse::new).toList());
+    }
+
+    @Transactional(readOnly = true)
+    public PaginaResponse<ContaResponse> listarTodasAsContas(String documento, int pagina, int tamanho) {
+        int tam = Math.min(Math.max(tamanho, 1), TAMANHO_MAXIMO_PAGINA);
+
+        Pageable pageable = PageRequest.of(Math.max(pagina, 0), tam, Sort.by("id"));
+
+        Page<Conta> resultado;
+        if (documento == null || documento.isBlank()) {
+            resultado = contaRepository.findAll(pageable);
+        } else {
+            resultado = contaRepository.findByDocumento(CpfCnpjValidador.normalizar(documento), pageable);
+        }
+
+        return PaginaResponse.paginatedRespomse(resultado, ContaResponse::new);
     }
 
     private Conta buscarParaAtualizar(Long numero, Integer digito) {
