@@ -24,7 +24,7 @@ public class GlobalExceptionHandler {
     public ProblemDetail regraDeNegocio(RuntimeException ex) {
         log.warn("422: {}", ex.getMessage());
 
-        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT , ex.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
