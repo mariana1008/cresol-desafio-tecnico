@@ -10,6 +10,8 @@ import com.cresol.desafio_tecnico.repository.ContaRepository;
 import com.cresol.desafio_tecnico.repository.MovimentacaoRepository;
 import com.cresol.desafio_tecnico.util.CpfCnpjValidador;
 import com.cresol.desafio_tecnico.util.DigitoVerificadorConta;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -17,10 +19,12 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Service
 public class ContaServiceImpl implements ContaService {
+    private static final Logger log = LoggerFactory.getLogger(ContaServiceImpl.class);
 
     private static final int TAMANHO_MAXIMO_PAGINA = 100;
 
@@ -38,6 +42,8 @@ public class ContaServiceImpl implements ContaService {
         long numero = contaRepository.proximoNumero();
         short digito = (short) DigitoVerificadorConta.calcular(numero);
         Conta conta = contaRepository.save(new Conta(numero, digito, documento));
+        log.info("Conta aberta: {}-{}", conta.getNumero(), conta.getDigito());
+
         return new ContaResponse(conta);
     }
 
@@ -47,44 +53,56 @@ public class ContaServiceImpl implements ContaService {
         conta.creditar(request.getValor());
         Movimentacao mov = movimentacaoRepository.save(
                 new Movimentacao(conta, TipoMovimentacao.DEPOSITO, request.getValor(), null, null));
+        log.info("Deposito: conta={}-{} valor={} saldo={}", request.getNumeroConta(), request.getDigitoConta(), request.getValor(), conta.getSaldo());
+
         return new MovimentacaoResponse(mov);
     }
 
     @Transactional
     public MovimentacaoResponse sacar(OperacaoRequest request) {
         Conta conta = buscarParaAtualizar(request.getNumeroConta(), request.getDigitoConta());
+        BigDecimal saldoAntes = conta.getSaldo();
         conta.debitar(request.getValor());
+        log.info("Saque: conta={}-{} valor={} saldo anterior={} saldo atual={}",
+                request.getNumeroConta(), request.getDigitoConta(), request.getValor(), saldoAntes, conta.getSaldo());
+
         Movimentacao mov = movimentacaoRepository.save(
                 new Movimentacao(conta, TipoMovimentacao.SAQUE, request.getValor(), null, null));
         return new MovimentacaoResponse(mov);
     }
 
     @Transactional
-    public TransferenciaResponse transferir(TransferenciaRequest r) {
-        if (r.getNumeroContaOrigem().equals(r.getNumeroContaDestino())) {
+    public TransferenciaResponse transferir(TransferenciaRequest request) {
+        log.info("Transferência iniciada: origem={}-{} destino={}-{} valor={}",
+                request.getNumeroContaOrigem(), request.getDigitoContaOrigem(),
+                request.getNumeroContaDestino(), request.getDigitoContaDestino(), request.getValor());
+
+        if (request.getNumeroContaOrigem().equals(request.getNumeroContaDestino())) {
             throw new OperacaoInvalidaException("Conta de origem e destino devem ser diferentes");
         }
 
         Conta origem;
         Conta destino;
-        if (r.getNumeroContaOrigem() < r.getNumeroContaDestino()) {
-            origem = buscarParaAtualizar(r.getNumeroContaOrigem(), r.getDigitoContaOrigem());
-            destino = buscarParaAtualizar(r.getNumeroContaDestino(), r.getDigitoContaDestino());
+        if (request.getNumeroContaOrigem() < request.getNumeroContaDestino()) {
+            origem = buscarParaAtualizar(request.getNumeroContaOrigem(), request.getDigitoContaOrigem());
+            destino = buscarParaAtualizar(request.getNumeroContaDestino(), request.getDigitoContaDestino());
         } else {
-            destino = buscarParaAtualizar(r.getNumeroContaDestino(), r.getDigitoContaDestino());
-            origem = buscarParaAtualizar(r.getNumeroContaOrigem(), r.getDigitoContaOrigem());
+            destino = buscarParaAtualizar(request.getNumeroContaDestino(), request.getDigitoContaDestino());
+            origem = buscarParaAtualizar(request.getNumeroContaOrigem(), request.getDigitoContaOrigem());
         }
 
-        origem.debitar(r.getValor());
-        destino.creditar(r.getValor());
+        origem.debitar(request.getValor());
+        destino.creditar(request.getValor());
 
         UUID transferenciaId = UUID.randomUUID();
         movimentacaoRepository.save(new Movimentacao(origem, TipoMovimentacao.TRANSFERENCIA_ENVIADA,
-                r.getValor(), destino.getId(), transferenciaId));
+                request.getValor(), destino.getId(), transferenciaId));
         movimentacaoRepository.save(new Movimentacao(destino, TipoMovimentacao.TRANSFERENCIA_RECEBIDA,
-                r.getValor(), origem.getId(), transferenciaId));
+                request.getValor(), origem.getId(), transferenciaId));
 
-        return new TransferenciaResponse(transferenciaId, r.getValor(), origem.getSaldo());
+        log.info("Transferência concluída: id={} saldoOrigem={} saldoDestino={}", transferenciaId, origem.getSaldo(), destino.getSaldo());
+
+        return new TransferenciaResponse(transferenciaId, request.getValor(), origem.getSaldo());
     }
 
     @Transactional(readOnly = true)
@@ -105,8 +123,11 @@ public class ContaServiceImpl implements ContaService {
 
     private Conta buscarParaAtualizar(Long numero, Integer digito) {
         if (!DigitoVerificadorConta.isValido(numero, digito)) {
+            log.warn("Dígito verificador inválido: {}-{}", numero, digito);
+
             throw new OperacaoInvalidaException("Dígito verificador inválido. " + numero);
         }
+
         return contaRepository.buscarParaAtualizar(numero, digito)
                 .orElseThrow(() -> new ContaNaoEncontradaException(numero, digito));
     }

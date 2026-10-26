@@ -94,7 +94,7 @@ Base URL: `http://localhost:8080`
 | Depósito | `POST /contas/deposito` | 201 |
 | Saque | `POST /contas/saque` | 201 |
 | Transferência | `POST /contas/transferencia` | 201 |
-| Extrato | `GET /contas/{numero}/{digito}/extrato` | 200 |
+| Extrato | `GET /extratos/{numero}/{digito}/extrato` | 200 |
 | Listar contas (extra) | `GET /contas?documento=...` | 200 |
 | Health check | `GET /actuator/health` | 200 |
 

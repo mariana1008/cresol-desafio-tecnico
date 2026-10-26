@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.time.Instant;
+import java.util.Optional;
 
 public interface MovimentacaoRepository extends JpaRepository<Movimentacao, Long> {
 
@@ -21,4 +22,6 @@ public interface MovimentacaoRepository extends JpaRepository<Movimentacao, Long
                                         @Param("inicio") Instant inicio,
                                         @Param("fim") Instant fim,
                                         Pageable pageable);
+
+    Optional<Movimentacao> findFirstByContaIdAndCriadaEmBeforeOrderByCriadaEmDescIdDesc(Long contaId, Instant fim);
 }

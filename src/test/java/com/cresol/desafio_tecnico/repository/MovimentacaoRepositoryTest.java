@@ -89,6 +89,23 @@ class MovimentacaoRepositoryTest {
         assertThat(pagina.getTotalPages()).isEqualTo(3);
     }
 
+    @Test
+    void testSaldoPorPeriodo() {
+        Conta conta = novaConta();
+        deposito(conta, "10.00");
+        deposito(conta, "20.00");
+
+        Instant futuro = Instant.now().plus(1, ChronoUnit.DAYS);
+        Instant passado = Instant.now().minus(1, ChronoUnit.DAYS);
+
+        assertThat(movimentacaoRepository
+                .findFirstByContaIdAndCriadaEmBeforeOrderByCriadaEmDescIdDesc(conta.getId(), futuro)
+                .orElseThrow().getSaldoApos()).isEqualByComparingTo("30.00");
+
+        assertThat(movimentacaoRepository
+                .findFirstByContaIdAndCriadaEmBeforeOrderByCriadaEmDescIdDesc(conta.getId(), passado))
+                .isEmpty();
+    }
 
     private Conta novaConta() {
         return contaRepository.saveAndFlush(new Conta(contaRepository.proximoNumero(), (short)2, "52998224725"));

@@ -13,6 +13,11 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+logging:
+  level:
+    root: INFO
+    com.cresol.desafio_tecnico: DEBUG
+    org.hibernate.SQL: DEBUG
 management:
   endpoints:
     web:
