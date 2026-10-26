@@ -26,7 +26,11 @@ import static org.mockito.Mockito.doThrow;
 @Import(TestcontainersConfiguration.class)
 public class ContaServiceTest {
 
-    @Autowired ContaService service;
+    @Autowired
+    ContaServiceImpl contaService;
+    @Autowired
+    ExtratoServiceImpl extratoService;
+
     @MockitoSpyBean MovimentacaoRepository movimentacaoRepository;
 
     @Test
@@ -36,13 +40,13 @@ public class ContaServiceTest {
         ExecutorService pool = Executors.newFixedThreadPool(20);
         List<Future<?>> fs = new ArrayList<>();
         for (int i = 0; i < n; i++) {
-            fs.add(pool.submit(() -> service.depositar(criarOpRequest(conta, "10.00"))));
+            fs.add(pool.submit(() -> contaService.depositar(criarOpRequest(conta, "10.00"))));
         }
         for (Future<?> f : fs) f.get(30, TimeUnit.SECONDS);
         pool.shutdown();
 
         assertThat(getSaldo(conta)).isEqualByComparingTo("1000.00");
-        var extrato = service.extrato(conta.getNumero(), conta.getDigito().intValue(),
+        var extrato = extratoService.extrato(conta.getNumero(), conta.getDigito().intValue(),
                 LocalDate.now().minusDays(1), LocalDate.now().plusDays(1), 0, 100);
         assertThat(extrato.getMovimentacoes()).hasSize(n);
     }
@@ -51,14 +55,14 @@ public class ContaServiceTest {
     void testTransferenciasCruzadas() throws Exception {
         ContaResponse a = novaConta("52998224725");
         ContaResponse b = novaConta("11222333000181");
-        service.depositar(criarOpRequest(a, "1000.00"));
-        service.depositar(criarOpRequest(b, "1000.00"));
+        contaService.depositar(criarOpRequest(a, "1000.00"));
+        contaService.depositar(criarOpRequest(b, "1000.00"));
 
         ExecutorService pool = Executors.newFixedThreadPool(20);
         List<Future<?>> fs = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
-            fs.add(pool.submit(() -> service.transferir(criarTransferencia(a, b, "10.00"))));
-            fs.add(pool.submit(() -> service.transferir(criarTransferencia(b, a, "10.00"))));
+            fs.add(pool.submit(() -> contaService.transferir(criarTransferencia(a, b, "10.00"))));
+            fs.add(pool.submit(() -> contaService.transferir(criarTransferencia(b, a, "10.00"))));
         }
         for (Future<?> f : fs) f.get(30, TimeUnit.SECONDS);
         pool.shutdown();
@@ -69,9 +73,9 @@ public class ContaServiceTest {
     @Test
     void testSaqueSemSaldo() {
         ContaResponse conta = novaConta("52998224725");
-        service.depositar(criarOpRequest(conta, "50.00"));
+        contaService.depositar(criarOpRequest(conta, "50.00"));
 
-        assertThatThrownBy(() -> service.sacar(criarOpRequest(conta, "80.00")))
+        assertThatThrownBy(() -> contaService.sacar(criarOpRequest(conta, "80.00")))
                 .isInstanceOf(SaldoInsuficienteException.class);
 
         assertThat(getSaldo(conta)).isEqualByComparingTo("50.00");
@@ -81,18 +85,18 @@ public class ContaServiceTest {
     void testRollbackCompleto() {
         ContaResponse origem = novaConta("52998224725");
         ContaResponse destino = novaConta("11222333000181");
-        service.depositar(criarOpRequest(origem, "100.00"));
+        contaService.depositar(criarOpRequest(origem, "100.00"));
 
         doThrow(new RuntimeException("falha"))
                 .when(movimentacaoRepository)
                 .save(argThat(m -> m.getTipo() == TipoMovimentacao.TRANSFERENCIA_RECEBIDA));
 
-        assertThatThrownBy(() -> service.transferir(criarTransferencia(origem, destino, "40.00")))
+        assertThatThrownBy(() -> contaService.transferir(criarTransferencia(origem, destino, "40.00")))
                 .hasMessageContaining("falha");
 
         assertThat(getSaldo(origem)).isEqualByComparingTo("100.00");
         assertThat(getSaldo(destino)).isEqualByComparingTo("0.00");
-        var ext = service.extrato(origem.getNumero(), origem.getDigito().intValue(),
+        var ext = extratoService.extrato(origem.getNumero(), origem.getDigito().intValue(),
                 LocalDate.now().minusDays(1), LocalDate.now().plusDays(1), 0, 100);
         assertThat(ext.getMovimentacoes()).hasSize(1);
     }
@@ -100,7 +104,7 @@ public class ContaServiceTest {
     private ContaResponse novaConta(String doc) {
         AberturaContaRequest contaRequest = new AberturaContaRequest();
         contaRequest.setDocumento(doc);
-        return service.abrir(contaRequest);
+        return contaService.abrir(contaRequest);
     }
 
     private OperacaoRequest criarOpRequest(ContaResponse response, String valor) {
@@ -122,6 +126,6 @@ public class ContaServiceTest {
     }
 
     private BigDecimal getSaldo(ContaResponse c) {
-        return service.extrato(c.getNumero(), c.getDigito().intValue(), null, null, 0, 1).getSaldoTotal();
+        return extratoService.extrato(c.getNumero(), c.getDigito().intValue(), null, null, 0, 1).getSaldoTotal();
     }
 }

@@ -1,20 +1,18 @@
 package com.cresol.desafio_tecnico.controller;
 
 import com.cresol.desafio_tecnico.dto.*;
-import com.cresol.desafio_tecnico.service.ContaService;
+import com.cresol.desafio_tecnico.service.ContaServiceImpl;
 import jakarta.validation.Valid;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-import java.time.LocalDate;
 
 @RestController
 @RequestMapping("/contas")
 public class ContaController {
 
-    private final ContaService service;
+    private final ContaServiceImpl service;
 
-    public ContaController(ContaService service) {
+    public ContaController(ContaServiceImpl service) {
         this.service = service;
     }
 
@@ -40,17 +38,6 @@ public class ContaController {
     @ResponseStatus(HttpStatus.CREATED)
     public TransferenciaResponse transferir(@Valid @RequestBody TransferenciaRequest request) {
         return service.transferir(request);
-    }
-
-    @GetMapping("/{numero}/{digito}/extrato")
-    public ExtratoResponse extrato(
-            @PathVariable Long numero,
-            @PathVariable Integer digito,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate inicio,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fim,
-            @RequestParam(defaultValue = "0") int pagina,
-            @RequestParam(defaultValue = "50") int tamanho) {
-        return service.extrato(numero, digito, inicio, fim, pagina, tamanho);
     }
 
     @GetMapping
